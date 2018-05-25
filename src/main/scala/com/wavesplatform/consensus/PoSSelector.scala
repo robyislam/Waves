@@ -52,7 +52,7 @@ class PoSSelector(blockchain: Blockchain, settings: BlockchainSettings) {
   def validateGeneratorSignature(height: Int, block: Block): Either[ValidationError, Unit] = {
     blockchain.lastBlock
       .map(b => generatorSignature(b.consensusData.generationSignature.arr, block.signerData.generator.publicKey))
-      .toRight(GenericError("No blocks in blockchain T.T"))
+      .toRight(GenericError("No blocks in blockchain"))
       .ensure(GenericError("Generation signatures doesnot match"))(_ sameElements block.consensusData.generationSignature.arr)
       .map(_ => ())
   }

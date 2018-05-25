@@ -2,18 +2,20 @@ package com.wavesplatform.consensus
 
 import cats.data.NonEmptyList
 import cats.implicits._
+import org.scalacheck.Gen
+import org.scalatest.prop.PropertyChecks
 import org.scalatest.{Matchers, PropSpec}
 import scorex.account.PrivateKeyAccount
 
 import scala.util.Random
 
-class FairPoSCalculatorTest extends PropSpec with Matchers {
+class FairPoSCalculatorTest extends PropSpec with PropertyChecks with Matchers {
 
   import PoSCalculator._
 
   val pos: PoSCalculator = NxtPoSCalculator //FairPoSCalculator
 
-  case class Block(height: Int, baseTarget: Long, miner: PrivateKeyAccount, timestamp: Long, delay: Long)
+  case class Block(height: Int, gs: Array[Byte], baseTarget: Long, miner: PrivateKeyAccount, timestamp: Long, delay: Long)
 
   def generationSignature: Array[Byte] = {
     val arr = new Array[Byte](32)
@@ -31,30 +33,45 @@ class FairPoSCalculatorTest extends PropSpec with Matchers {
   }
 
   property("///") {
-    val prevBaseTarget = defaultBaseTarget
-//    val balance        = 100000000000L
-    val h              = hit(generationSignature)
-    val delay = round(((h * 1000) / (BigInt(prevBaseTarget) * balance)).toLong)
-    val target = BigInt(prevBaseTarget) * (delay / 1000) * balance
-    assert(target > h)
+
+    val minerGen = Gen.oneOf(mkMiners.toList)
+    val baseTargetGen = Gen.chooseNum(20, 200)
+
+    forAll(minerGen, baseTargetGen) { (minerWithBalance, baseTarget) =>
+      val (miner, balance) = minerWithBalance
+      val gs               = generatorSignature(generationSignature, miner.publicKey)
+      val h                = hit(gs)
+      val delay            = round(pos.calculateDelay(h, baseTarget, balance))
+      val target           = BigInt(baseTarget) * (delay / 1000) * balance
+      (target > h) shouldBe true
+    }
   }
   def round(timestamp: Long): Long = (Math.ceil(timestamp / 1000.0) * 1000).toLong
-
 
   property("Correct consensus parameters of blocks generated with FairPoS") {
 
     val miners = mkMiners
-    val first  = Block(0, defaultBaseTarget, PrivateKeyAccount(generationSignature), System.currentTimeMillis(), 0)
+    val first  = Block(0, generationSignature, defaultBaseTarget, miners.head._1, System.currentTimeMillis(), 0)
 
-    val chain = (1 to 100000 foldLeft NonEmptyList.of(first))((acc, i) => {
-      println(i)
+    val chain = (1 to 100000 foldLeft NonEmptyList.of(first))((acc, _) => {
       val gg     = acc.tail.lift(1)
-      val blocks = miners.map(mineBlock(acc.head, gg, _))
+      val lastBlock = acc.head
+
+      val blocks = miners.map(mineBlock(lastBlock, gg, _))
 
       val next = blocks.minBy(_.delay)
 
       next :: acc
     }).reverse.tail
+
+    chain.sliding(2)
+      .forall({
+        case a::b::Nil =>
+          val h = hit(b.gs)
+          val t = target(a.timestamp, a.baseTarget, b.timestamp, miners(b.miner))
+          println(h, t, b.miner)
+          h < t
+      }) should be(true)
 
     val maxBT = chain.maxBy(_.baseTarget).baseTarget
     val avgBT = chain.map(_.baseTarget).sum / chain.length
@@ -73,7 +90,8 @@ class FairPoSCalculatorTest extends PropSpec with Matchers {
 
     val minersPerfomance = calcPerfomance(chain, miners)
 
-    assert(minersPerfomance.forall(p => p._2 < 1.1 && p._2 > 0.9))
+//    println(minersPerfomance)
+//    assert(minersPerfomance.forall(p => p._2 < 1.1 && p._2 > 0.9))
     assert(avgDelay < 80000 && avgDelay > 40000)
     assert(avgBT < 200 && avgBT > 20)
   }
@@ -82,7 +100,7 @@ class FairPoSCalculatorTest extends PropSpec with Matchers {
     val (miner, balance) = minerWithBalance
     val gs               = generatorSignature(generationSignature, miner.publicKey)
     val h                = hit(gs)
-    val delay            = ((h * 1000) / (BigInt(prev.baseTarget) * balance)).toLong + 1000
+    val delay            = pos.calculateDelay(h, prev.baseTarget, balance)
 
     val bt = pos.calculateBaseTarget(
       blockDelaySeconds,
@@ -95,6 +113,7 @@ class FairPoSCalculatorTest extends PropSpec with Matchers {
 
     Block(
       prev.height + 1,
+      gs,
       bt,
       miner,
       prev.timestamp + delay,
