@@ -11,7 +11,7 @@ class FairPoSCalculatorTest extends PropSpec with Matchers {
 
   import PoSCalculator._
 
-  val pos: PoSCalculator = FairPoSCalculator
+  val pos: PoSCalculator = NxtPoSCalculator //FairPoSCalculator
 
   case class Block(height: Int, baseTarget: Long, miner: PrivateKeyAccount, timestamp: Long, delay: Long)
 
@@ -25,12 +25,29 @@ class FairPoSCalculatorTest extends PropSpec with Matchers {
   val blockDelaySeconds = 60
   val defaultBaseTarget = 100L
 
+  def target(prevBlockTimestamp: Long, prevBaseTarget: Long, timestamp: Long, balance: Long): BigInt = {
+    val blockDelaySeconds = (timestamp - prevBlockTimestamp) / 1000
+    BigInt(prevBaseTarget) * blockDelaySeconds * balance
+  }
+
+  property("///") {
+    val prevBaseTarget = defaultBaseTarget
+//    val balance        = 100000000000L
+    val h              = hit(generationSignature)
+    val delay = round(((h * 1000) / (BigInt(prevBaseTarget) * balance)).toLong)
+    val target = BigInt(prevBaseTarget) * (delay / 1000) * balance
+    assert(target > h)
+  }
+  def round(timestamp: Long): Long = (Math.ceil(timestamp / 1000.0) * 1000).toLong
+
+
   property("Correct consensus parameters of blocks generated with FairPoS") {
 
     val miners = mkMiners
     val first  = Block(0, defaultBaseTarget, PrivateKeyAccount(generationSignature), System.currentTimeMillis(), 0)
 
-    val chain = (1 to 100000 foldLeft NonEmptyList.of(first))((acc, _) => {
+    val chain = (1 to 100000 foldLeft NonEmptyList.of(first))((acc, i) => {
+      println(i)
       val gg     = acc.tail.lift(1)
       val blocks = miners.map(mineBlock(acc.head, gg, _))
 
@@ -65,7 +82,8 @@ class FairPoSCalculatorTest extends PropSpec with Matchers {
     val (miner, balance) = minerWithBalance
     val gs               = generatorSignature(generationSignature, miner.publicKey)
     val h                = hit(gs)
-    val delay            = pos.calculateDelay(h, prev.baseTarget, balance)
+    val delay            = ((h * 1000) / (BigInt(prev.baseTarget) * balance)).toLong + 1000
+
     val bt = pos.calculateBaseTarget(
       blockDelaySeconds,
       prev.height + 1,
